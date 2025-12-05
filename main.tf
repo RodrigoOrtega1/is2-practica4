@@ -28,7 +28,7 @@ resource "aws_subnet" "private" { # crea la subnet privada, donde va la base de 
 
 resource "aws_subnet" "private_db" { # crea la segunda subnet privada, donde va la base de datos
   vpc_id     = aws_vpc.main.id
-  cidr_block = var.subnet_private_cidr
+  cidr_block = var.subnet_private_cidr_2
   availability_zone = var.private_subnet_az_1
 
   tags = {
@@ -49,6 +49,121 @@ resource "aws_ecr_repository" "main" { #crea el repositorio ECR para las imagene
   image_scanning_configuration {
     scan_on_push = true
   }
+}
+
+resource "aws_iam_role" "github_actions" { # crea el rol IAM para GitHub Actions
+  name = "${var.app_name}-github-actions-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github_actions.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:RodrigoOrtega1/is2-back-blog:*",
+              "repo:1rv1nn/Materias_front:*"
+            ]
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_openid_connect_provider" "github_actions" { # OIDC Provider for GitHub Actions, autenticar entre AWS y GitHub
+  url = "https://token.actions.githubusercontent.com"
+
+  client_id_list = [
+    "sts.amazonaws.com"
+  ]
+
+  thumbprint_list = [
+    "6938fd4d98bab03faadb97b34396831e3780aea1",
+    "1c58a3a8518e8759bf075b76b750d4f2df264fcd"
+  ]
+}
+
+resource "aws_iam_role_policy" "github_actions_ecr" { # política para que GitHub Actions pueda interactuar con ECR
+  name = "github-actions-ecr-policy"
+  role = aws_iam_role.github_actions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload"
+        ]
+        Resource = aws_ecr_repository.main.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role" "ec2_ecr_role" { # crea el rol IAM para la instancia EC2 que le permite extraer imágenes de ECR
+  name = "${var.app_name}-ec2-ecr-pull-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"  # EC2 assumes this role, not GitHub
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "ec2_ecr_policy" { # política para que la instancia EC2 pueda extraer imágenes de ECR
+  name = "${var.app_name}-ec2-ecr-pull-policy"
+  role = aws_iam_role.ec2_ecr_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "ec2_profile" { # wrapper para el rol IAM de la instancia EC2
+  name = "${var.app_name}-ec2-profile"
+  role = aws_iam_role.ec2_ecr_role.name
 }
 
 resource "aws_db_instance" "main" { # crea la base de datos
@@ -72,8 +187,9 @@ resource "aws_instance" "front" { # crea la instancia EC2 para el frontend
   key_name               = aws_key_pair.deployed.key_name
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.ec2.id]
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
-  user_data = file("docker_install.sh")
+  user_data = file("user_data.sh")
 
   tags = {
     Name = "${var.app_name}-instance-front"
@@ -229,18 +345,19 @@ resource "aws_db_subnet_group" "main" { # crea el subnet group para la base de d
   }
 }
 
-resource "tls_private_key" "generated" { # genera la clave privada para el key pair de EC2
-  algorithm  = "ECDSA"
+resource "tls_private_key" "generated" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
 }
 
-resource "aws_key_pair" "deployed" { # crea el key pair para acceder a la instancia EC2
+resource "aws_key_pair" "deployed" {
   key_name   = var.ec2_key_name
   public_key = tls_private_key.generated.public_key_openssh
 }
 
-resource "local_file" "private_key_pem" { # guarda la clave privada en un archivo local
-  content  = tls_private_key.generated.private_key_pem
-  filename = "${var.ec2_key_name}.pem"
+resource "local_file" "private_key_pem" {
+  content         = tls_private_key.generated.private_key_pem
+  filename        = "${var.ec2_key_name}.pem"
   file_permission = "0400"
 }
 
@@ -250,8 +367,9 @@ resource "aws_instance" "back" { # crea la instancia EC2 para el backend
   key_name               = aws_key_pair.deployed.key_name
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.ec2.id]
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
-  user_data = file("docker_install.sh")
+  user_data = file("user_data.sh")
 
   tags = {
     Name = "${var.app_name}-instance-back"
@@ -272,4 +390,62 @@ resource "aws_lb_target_group_attachment" "back" { # asocia la instancia EC2 del
 
 data "aws_ssm_parameter" "amazon_linux_2_ami" { # obtiene el ID de la AMI de Amazon Linux 2
   name = "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+}
+
+resource "aws_eip" "back" { # crea una IP elástica para la instancia backend
+  instance = aws_instance.back.id
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.app_name}-eip-back"
+  }
+}
+
+resource "aws_eip" "front" { # crea una IP elástica para la instancia frontend
+  instance = aws_instance.front.id
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.app_name}-eip-front"
+  }
+}
+
+resource "aws_eip_association" "front" { # asocia la IP elástica a la instancia frontend
+  instance_id   = aws_instance.front.id
+  allocation_id = aws_eip.front.id
+}
+
+resource "aws_eip_association" "back" { # asocia la IP elástica a la instancia backend
+  instance_id   = aws_instance.back.id
+  allocation_id = aws_eip.back.id
+}
+
+resource "aws_route53_zone" "main" { # crea una zona hospedada en Route 53
+  name = var.route53_zone_name
+}
+
+resource "aws_route53_record" "front" { # crea un registro A para el frontend en Route 53
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "www.${var.route53_zone_name}"
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.front.public_ip] #puede haber un problema aqui
+}
+
+resource "aws_route53_record" "back" { # crea un registro A para el backend en Route 53
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "api.${var.route53_zone_name}"
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.back.public_ip] #puede haber un problema aqui
+}
+
+output "nameserver_addresses" {
+  description = "Direcciones de los nameservers de la zona hospedada en Route 53"
+  value       = aws_route53_zone.main.name_servers
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
 }

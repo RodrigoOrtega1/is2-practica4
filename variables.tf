@@ -46,6 +46,12 @@ variable "subnet_private_cidr" {
   default     = "10.0.6.0/24"
 }
 
+variable "subnet_private_cidr_2" {
+  type        = string
+  description = "CIDR for the second private subnet"
+  default     = "10.0.7.0/24"
+}
+
 variable "public_subnet_az_1" {
   description = "Availability zone for the first public subnet (e.g. us-east-1a)"
   type        = string
@@ -74,13 +80,13 @@ variable "private_subnet_az_4" {
 variable "private_subnet_az_1" {
   type        = string
   description = "Availability Zone for the first private subnet (e.g. us-east-1a)"
-  default     = "us-east-11"
+  default     = "us-east-1e"
 }
 
 variable "ec2_key_name" {
   description = "Nombre del Key Pair de EC2 para el acceso SSH."
   type        = string
-  default     = "ssh-keys-mi-app"
+  default     = "ssh-keys-mi-app-new"
 }
 
 variable "ec2_instance_type" {
@@ -122,5 +128,11 @@ variable "db_password" {
   description = "Contraseña para el administrador de la base de datos."
   type        = string
   sensitive   = true
-  default = "123456Absrc"
+  default     = "123456Absrc"
+}
+
+variable "route53_zone_name" {
+  description = "Nombre de la zona hospedada en Route 53."
+  type        = string
+  default     = "blogresenas-is2-7190.lat"
 }
