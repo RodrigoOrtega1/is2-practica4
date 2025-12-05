@@ -428,24 +428,49 @@ resource "aws_route53_record" "front" { # crea un registro A para el frontend en
   zone_id = aws_route53_zone.main.zone_id
   name    = "www.${var.route53_zone_name}"
   type    = "A"
-  ttl     = 300
-  records = [aws_eip.front.public_ip] #puede haber un problema aqui
+
+  alias {
+    name                   = aws_lb.main.dns_name
+    zone_id                = aws_lb.main.zone_id
+    evaluate_target_health = true
+  }
 }
 
 resource "aws_route53_record" "back" { # crea un registro A para el backend en Route 53
   zone_id = aws_route53_zone.main.zone_id
   name    = "api.${var.route53_zone_name}"
   type    = "A"
-  ttl     = 300
-  records = [aws_eip.back.public_ip] #puede haber un problema aqui
+
+  alias {
+    name                   = aws_lb.main.dns_name
+    zone_id                = aws_lb.main.zone_id
+    evaluate_target_health = true
+  }
 }
 
-output "nameserver_addresses" {
-  description = "Direcciones de los nameservers de la zona hospedada en Route 53"
-  value       = aws_route53_zone.main.name_servers
+resource "aws_route53_record" "root" { # crea un registro A para el dominio raíz
+  zone_id = aws_route53_zone.main.zone_id
+  name    = var.route53_zone_name
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.main.dns_name
+    zone_id                = aws_lb.main.zone_id
+    evaluate_target_health = true
+  }
 }
 
 resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public.id
   route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "public_2" {
+  subnet_id      = aws_subnet.public_2.id
+  route_table_id = aws_route_table.public.id
+}
+
+output "nameserver_addresses" {
+  description = "Direcciones de los nameservers de la zona hospedada en Route 53"
+  value       = aws_route53_zone.main.name_servers
 }
